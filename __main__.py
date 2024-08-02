@@ -1,4 +1,6 @@
 import argparse
+from hashlib import md5
+import os
 from pathlib import Path
 import threading
 import time
@@ -52,7 +54,7 @@ class PlayerMetadata:
         self.play_percentage = self.play_position / self.song_length * 100
         
     def uuid(self):
-        return hash(f"{self.song_id}{self.song_title}{self.song_artist}{self.song_album}{self.song_album_artist}")
+        return md5(f"{self.song_title}{self.song_artist}{self.song_album}{self.song_album_artist}".encode()).hexdigest()
         
     def __str__(self):
         return "Title: {self.song_title}\nArtist: {self.song_artist}\nAlbum: {self.song_album}\nAlbum Artist: {self.song_album_artist}\nTrack Number: {self.song_track_number}\nLength: {self.song_length}".format(self=self)
@@ -78,6 +80,10 @@ class MPris2Scrobbler:
         self.player = None
         self.player_state = None
         self.connect_to_player(kwargs['player_uri'] if 'player_uri' in kwargs else None)
+        # python check if file exists
+        if os.path.exists("last_scrobble.txt"):
+            self._last_scrobble = self.read_last_scrobble()
+            logger.info(f"Loaded Last scrobble: {self._last_scrobble}")
     
     def connect_to_player(self, player_uri=None):
         """
@@ -125,6 +131,17 @@ class MPris2Scrobbler:
         for key, value in array.items():
             logger.debug(f"{key}: {value}")
             
+    def write_last_scrobble(self, scrobble_id:str):
+        with open("last_scrobble.txt", "w") as file:
+            file.write(scrobble_id)
+            
+    def read_last_scrobble(self):
+        try:
+            with open("last_scrobble.txt", "r") as file:
+                return file.read()
+        except FileNotFoundError:
+            return
+            
     def tick(self, run_event):
         while run_event.is_set():
             if self.player is None or self.player.PlaybackStatus != "Playing":
@@ -132,13 +149,15 @@ class MPris2Scrobbler:
                 continue
             
             self._metadata = PlayerMetadata(self.player.Metadata, self.player.Position)
+            logger.debug(self._metadata)
             if self._metadata.play_percentage >= 50 and self._last_scrobble != self._metadata.uuid():
                 self._last_scrobble = self._metadata.uuid()
                 result = self.api.submit_scrobble(self._metadata.song_title, [self._metadata.song_artist], self._metadata.song_album, [self._metadata.song_album_artist], self._metadata.play_position, self._metadata.song_length, get_unix_timestamp())
                 logger.info(f"Scrobble was submitted!")
                 logger.debug(f"Response: {result}")
+                self.write_last_scrobble(self._last_scrobble)
             elif self._metadata.play_percentage < 50:
-                logger.debug(f"Playing: {self._metadata.song_title} by {self._metadata.song_artist} ({self._metadata.play_percentage:.2f}%)")
+                logger.debug(f"Playing: {self._metadata.song_title} ({self._metadata.uuid()}) by {self._metadata.song_artist} ({self._metadata.play_percentage:.2f}%)")
             else:
                 logger.debug(f"Scrobble already submitted for: {self._last_scrobble} - {self._metadata.uuid()}")
             
