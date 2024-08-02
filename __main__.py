@@ -51,6 +51,9 @@ class PlayerMetadata:
         self.play_position = position / 1000000
         self.play_percentage = self.play_position / self.song_length * 100
         
+    def uuid(self):
+        return hash(f"{self.song_id}{self.song_title}{self.song_artist}{self.song_album}{self.song_album_artist}")
+        
     def __str__(self):
         return "Title: {self.song_title}\nArtist: {self.song_artist}\nAlbum: {self.song_album}\nAlbum Artist: {self.song_album_artist}\nTrack Number: {self.song_track_number}\nLength: {self.song_length}".format(self=self)
 
@@ -129,13 +132,15 @@ class MPris2Scrobbler:
                 continue
             
             self._metadata = PlayerMetadata(self.player.Metadata, self.player.Position)
-            if self._metadata.play_percentage >= 50 and self._last_scrobble != self._metadata.song_id:
-                self._last_scrobble = self._metadata.song_id
+            if self._metadata.play_percentage >= 50 and self._last_scrobble != self._metadata.uuid():
+                self._last_scrobble = self._metadata.uuid()
                 result = self.api.submit_scrobble(self._metadata.song_title, [self._metadata.song_artist], self._metadata.song_album, [self._metadata.song_album_artist], self._metadata.play_position, self._metadata.song_length, get_unix_timestamp())
                 logger.info(f"Scrobble was submitted!")
                 logger.debug(f"Response: {result}")
             elif self._metadata.play_percentage < 50:
                 logger.debug(f"Playing: {self._metadata.song_title} by {self._metadata.song_artist} ({self._metadata.play_percentage:.2f}%)")
+            else:
+                logger.debug(f"Scrobble already submitted for: {self._last_scrobble} - {self._metadata.uuid()}")
             
             time.sleep(0.5)
     
