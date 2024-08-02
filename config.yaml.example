@@ -1,0 +1,6 @@
+data_path: scrobble
+
+api_url: http://127.0.0.1:42010
+api_key: 1234567890
+
+log_level: DEBUG
