@@ -17,8 +17,10 @@ from Globals import get_unix_timestamp, logger, logging_format
 class PlayerMetadata:
     song_id = None
     song_title = ""
+    # TODO: support multiple artists
     song_artist = ""
     song_album = ""
+    # TODO: support multiple album artists
     song_album_artist = ""
     song_track_number = 0
     song_length = 0
@@ -53,11 +55,32 @@ class PlayerMetadata:
         self.play_position = position / 1000000
         self.play_percentage = self.play_position / self.song_length * 100
         
+    def format_length(self):
+        minutes, seconds = divmod(self.song_length, 60)
+        return f"{int(minutes):02d}:{int(seconds):02d}"
+    
+    def format_play_position(self):
+        minutes, seconds = divmod(self.play_position, 60)
+        return f"{int(minutes):02d}:{int(seconds):02d}"
+        
     def uuid(self):
-        return md5(f"{self.song_title}{self.song_artist}{self.song_album}{self.song_album_artist}".encode()).hexdigest()
+        return md5(f"{self.song_title}{self.song_artist}{self.song_album}{self.song_album_artist}{self.song_url}".encode()).hexdigest()
         
     def __str__(self):
-        return "Title: {self.song_title}\nArtist: {self.song_artist}\nAlbum: {self.song_album}\nAlbum Artist: {self.song_album_artist}\nTrack Number: {self.song_track_number}\nLength: {self.song_length}".format(self=self)
+        formatted_length = self.format_length()
+        formatted_play_position = self.format_play_position()
+        return """
+Song ID: {self.song_id}
+Title: {self.song_title}
+Artist: {self.song_artist}
+Album: {self.song_album}
+Album Artist: {self.song_album_artist}
+Track Number: {self.song_track_number}
+Length: {self.song_length} {formatted_length}
+URL: {self.song_url}
+Play Position: {self.play_position} {formatted_play_position}
+Play Percentage: {self.play_percentage:.2f}
+""".format(self=self, formatted_length=formatted_length, formatted_play_position=formatted_play_position)
 
 class MPris2Scrobbler:
     """
@@ -67,30 +90,35 @@ class MPris2Scrobbler:
     and send it to a scrobbling service like Last.fm, libre.fm or maloja.
     """
     _player_uri = None
-    _player = None
+    _player:Player = None
     _metadata:PlayerMetadata = None
     _last_scrobble:str = ""
     
     api: MalojaApi = None
     cache: Cache = None
+    
+    _configPlayerUri = None
 
     def __init__(self, **kwargs):
         self.api = MalojaApi(kwargs['api_url'], kwargs['api_key'])
         self.cache = Cache()
         self.player = None
         self.player_state = None
-        self.connect_to_player(kwargs['player_uri'] if 'player_uri' in kwargs else None)
+        self._configPlayerUri = kwargs['player_uri'] if 'player_uri' in kwargs else None
+        self.connect_to_player()
         # python check if file exists
         if os.path.exists("last_scrobble.txt"):
             self._last_scrobble = self.read_last_scrobble()
             logger.info(f"Loaded Last scrobble: {self._last_scrobble}")
     
-    def connect_to_player(self, player_uri=None):
+    def connect_to_player(self):
         """
         Connect to the player with the given URI.
         
         If no URI is given, connect to the first player found.
         """
+        player_uri = self._configPlayerUri
+        
         for uri in get_players_uri():
             uri = str(uri)
             if player_uri is None:
@@ -98,6 +126,9 @@ class MPris2Scrobbler:
                 break
             elif uri == player_uri:
                 break
+        if player_uri is None:
+            return
+        
         self._player_uri = player_uri
         logger.info(f"Listening to events from player: {player_uri}")
         
@@ -144,20 +175,25 @@ class MPris2Scrobbler:
             
     def tick(self, run_event):
         while run_event.is_set():
-            if self.player is None or self.player.PlaybackStatus != "Playing":
+            if self.player is None:
+                self.connect_to_player()
+                time.sleep(5)
+                continue
+            if self.player.PlaybackStatus != "Playing":
                 time.sleep(0.25)
                 continue
             
             self._metadata = PlayerMetadata(self.player.Metadata, self.player.Position)
             logger.debug(self._metadata)
-            if self._metadata.play_percentage >= 50 and self._last_scrobble != self._metadata.uuid():
-                self._last_scrobble = self._metadata.uuid()
-                result = self.api.submit_scrobble(self._metadata.song_title, [self._metadata.song_artist], self._metadata.song_album, [self._metadata.song_album_artist], self._metadata.play_position, self._metadata.song_length, get_unix_timestamp())
-                logger.info(f"Scrobble was submitted!")
-                logger.debug(f"Response: {result}")
-                self.write_last_scrobble(self._last_scrobble)
-            elif self._metadata.play_percentage < 50:
-                logger.debug(f"Playing: {self._metadata.song_title} ({self._metadata.uuid()}) by {self._metadata.song_artist} ({self._metadata.play_percentage:.2f}%)")
+            if self._last_scrobble != self._metadata.uuid():
+                if self._metadata.play_percentage >= 50:
+                    self._last_scrobble = self._metadata.uuid()
+                    result = self.api.submit_scrobble(self._metadata.song_title, [self._metadata.song_artist], self._metadata.song_album, [self._metadata.song_album_artist], self._metadata.play_position, self._metadata.song_length, get_unix_timestamp())
+                    logger.info(f"Scrobble was submitted!")
+                    logger.debug(f"Response: {result}")
+                    self.write_last_scrobble(self._last_scrobble)
+                elif self._metadata.play_percentage < 50:
+                    logger.debug(f"Playing: {self._metadata.song_title} ({self._metadata.uuid()}) by {self._metadata.song_artist} ({self._metadata.play_percentage:.2f}%)")
             else:
                 logger.debug(f"Scrobble already submitted for: {self._last_scrobble} - {self._metadata.uuid()}")
             
